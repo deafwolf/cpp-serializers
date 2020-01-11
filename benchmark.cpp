@@ -57,10 +57,30 @@ struct Result {
     {
     }
 
+    Result(std::string name, std::string version, size_t size, int64_t encode, int64_t decode)
+        : name(name)
+        , version(version)
+        , size(size)
+        , encode_time(encode)
+        , decode_time(decode)
+    {
+    }
+
+    Result(std::string name, uint64_t version, size_t size, int64_t encode, int64_t decode)
+        : name(name)
+        , version(boost::lexical_cast<std::string>(version))
+        , size(size)
+        , encode_time(encode)
+        , decode_time(decode)
+    {
+    }
+
     std::string name;
     std::string version;
     size_t size = 0;
     int64_t time = 0;
+    int64_t encode_time = 0;
+    int64_t decode_time = 0;
 };
 
 // clang-format off
@@ -96,6 +116,8 @@ print_results(Args args, std::vector<Result> results)
             std::cout << "Iterations: " << args.iterations << std::endl;
             std::cout << "Size      : " << result.size << " bytes" << std::endl;
             std::cout << "Time      : " << result.time << " milliseconds" << std::endl;
+            std::cout << "EncodeTime: " << result.encode_time << " milliseconds" << std::endl;
+            std::cout << "DecodeTime: " << result.decode_time << " milliseconds" << std::endl;
             std::cout << std::endl;
         }
     }
@@ -284,16 +306,22 @@ protobuf_serialization_test(size_t iterations)
         throw std::logic_error("protobuf's case: deserialization failed");
     }
 
-    auto start = std::chrono::high_resolution_clock::now();
+    auto decode_start = std::chrono::high_resolution_clock::now();
+    for (size_t i = 0; i < iterations; i++) {
+        r2.ParseFromString(serialized);
+    }
+    auto decode_finish = std::chrono::high_resolution_clock::now();
+    auto decode_duration = std::chrono::duration_cast<std::chrono::milliseconds>(decode_finish - decode_start).count();
+
+    auto encode_start = std::chrono::high_resolution_clock::now();
     for (size_t i = 0; i < iterations; i++) {
         serialized.clear();
         r1.SerializeToString(&serialized);
-        r2.ParseFromString(serialized);
     }
-    auto finish = std::chrono::high_resolution_clock::now();
-    auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(finish - start).count();
+    auto encode_finish = std::chrono::high_resolution_clock::now();
+    auto encode_duration = std::chrono::duration_cast<std::chrono::milliseconds>(encode_finish - encode_start).count();
 
-    return Result("protobuf", GOOGLE_PROTOBUF_VERSION, serialized.size(), duration);
+    return Result("protobuf", GOOGLE_PROTOBUF_VERSION, serialized.size(), encode_duration, decode_duration);
 }
 
 Result
@@ -328,7 +356,18 @@ capnproto_serialization_test(size_t iterations)
         size += segment.asBytes().size();
     }
 
-    auto start = std::chrono::high_resolution_clock::now();
+    auto decode_start = std::chrono::high_resolution_clock::now();
+    for (size_t i = 0; i < iterations; i++) {
+        capnp::SegmentArrayMessageReader reader(serialized);
+        auto r2 = reader.getRoot<Record>();
+
+        (void)r2.getIds().size();
+        (void)r2.getStrings().size();
+    }
+    auto decode_finish = std::chrono::high_resolution_clock::now();
+    auto decode_duration = std::chrono::duration_cast<std::chrono::milliseconds>(decode_finish - decode_start).count();
+
+    auto encode_start = std::chrono::high_resolution_clock::now();
     for (size_t i = 0; i < iterations; i++) {
         capnp::MallocMessageBuilder message;
         Record::Builder r1 = message.getRoot<Record>();
@@ -344,16 +383,11 @@ capnproto_serialization_test(size_t iterations)
         }
 
         serialized = message.getSegmentsForOutput();
-        capnp::SegmentArrayMessageReader reader(serialized);
-        auto r2 = reader.getRoot<Record>();
-
-        (void)r2.getIds().size();
-        (void)r2.getStrings().size();
     }
-    auto finish = std::chrono::high_resolution_clock::now();
-    auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(finish - start).count();
+    auto encode_finish = std::chrono::high_resolution_clock::now();
+    auto encode_duration = std::chrono::duration_cast<std::chrono::milliseconds>(encode_finish - encode_start).count();
 
-    return Result("capnproto", CAPNP_VERSION, size, duration);
+    return Result("capnproto", CAPNP_VERSION, size, encode_duration, decode_duration);
 }
 
 Result
@@ -555,9 +589,17 @@ flatbuffers_serialization_test(size_t iterations)
 
     auto size = builder.GetSize();
 
+    auto decode_start = std::chrono::high_resolution_clock::now();
+    for (size_t i = 0; i < iterations; i++) {
+        auto r2 = GetRecord(buf.data());
+        (void)r2->ids()[0];
+    }
+    auto decode_finish = std::chrono::high_resolution_clock::now();
+    auto decode_duration = std::chrono::duration_cast<std::chrono::milliseconds>(decode_finish - decode_start).count();
+
     builder.ReleaseBufferPointer();
 
-    auto start = std::chrono::high_resolution_clock::now();
+    auto encode_start = std::chrono::high_resolution_clock::now();
     for (size_t i = 0; i < iterations; i++) {
         flatbuffers::FlatBufferBuilder builder;
         strings.clear();
@@ -579,13 +621,13 @@ flatbuffers_serialization_test(size_t iterations)
 
         builder.ReleaseBufferPointer();
     }
-    auto finish = std::chrono::high_resolution_clock::now();
-    auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(finish - start).count();
+    auto encode_finish = std::chrono::high_resolution_clock::now();
+    auto encode_duration = std::chrono::duration_cast<std::chrono::milliseconds>(encode_finish - encode_start).count();
 
     auto version = FLATBUFFERS_STRING(FLATBUFFERS_VERSION_MAJOR) "." FLATBUFFERS_STRING(
         FLATBUFFERS_VERSION_MINOR) "." FLATBUFFERS_STRING(FLATBUFFERS_VERSION_REVISION);
 
-    return Result("flatbuffers", version, size, duration);
+    return Result("flatbuffers", version, size, encode_duration, decode_duration);
 }
 
 template <std::size_t opts>
